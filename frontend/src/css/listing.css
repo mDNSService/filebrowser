@@ -12,10 +12,8 @@
 
 #listing>div {
   display: flex;
-  padding: 0;
   flex-wrap: wrap;
   justify-content: flex-start;
-  position: relative;
 }
 
 #listing .item {
@@ -50,6 +48,13 @@
 
 #listing .item i {
   font-size: 4em;
+  margin-right: 0.1em;
+  vertical-align: bottom;
+}
+
+#listing .item img {
+  width: 4em;
+  height: 4em;
   margin-right: 0.1em;
   vertical-align: bottom;
 }
@@ -131,6 +136,11 @@
   font-size: 2em;
 }
 
+#listing.list .item div:first-of-type img {
+  width: 2em;
+  height: 2em;
+}
+
 #listing.list .item div:last-of-type {
   width: calc(100% - 3em);
   display: flex;
@@ -207,16 +217,6 @@
   font-weight: bold;
 }
 
-@keyframes slidein {
-  from {
-    bottom: -4em;
-  }
-
-  to {
-    bottom: 0;
-  }
-}
-
 #listing #multiple-selection {
   position: fixed;
   bottom: -4em;
@@ -225,16 +225,13 @@
   width: 100%;
   background-color: var(--blue);
   height: 4em;
-  display: none;
   padding: 0.5em 0.5em 0.5em 1em;
   justify-content: space-between;
-  align-items: center;
   transition: .2s ease bottom;
 }
 
 #listing #multiple-selection.active {
-  animation: slidein 0.2s forwards;
-  display: flex;
+  bottom: 0;
 }
 
 #listing #multiple-selection p,

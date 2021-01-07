@@ -1,40 +1,54 @@
 package http
 
 import (
+	"bytes"
 	"errors"
+	"io/ioutil"
 	"net/http"
 	"net/url"
+	gopath "path"
 	"path/filepath"
 	"strings"
 
-	"github.com/filebrowser/filebrowser/v2/files"
-	"github.com/filebrowser/filebrowser/v2/users"
-	"github.com/hacdias/fileutils"
 	"github.com/mholt/archiver"
+	"github.com/spf13/afero"
+
+	"github.com/filebrowser/filebrowser/v2/files"
+	"github.com/filebrowser/filebrowser/v2/fileutils"
+	"github.com/filebrowser/filebrowser/v2/users"
 )
 
-func parseQueryFiles(r *http.Request, f *files.FileInfo, u *users.User) ([]string, error) {
-	files := []string{}
+func slashClean(name string) string {
+	if name == "" || name[0] != '/' {
+		name = "/" + name
+	}
+	return gopath.Clean(name)
+}
+
+func parseQueryFiles(r *http.Request, f *files.FileInfo, _ *users.User) ([]string, error) {
+	var fileSlice []string
 	names := strings.Split(r.URL.Query().Get("files"), ",")
 
 	if len(names) == 0 {
-		files = append(files, f.Path)
+		fileSlice = append(fileSlice, f.Path)
 	} else {
 		for _, name := range names {
-			name, err := url.QueryUnescape(strings.Replace(name, "+", "%2B", -1))
+			name, err := url.QueryUnescape(strings.Replace(name, "+", "%2B", -1)) //nolint:shadow
 			if err != nil {
 				return nil, err
 			}
 
-			name = fileutils.SlashClean(name)
-			files = append(files, filepath.Join(f.Path, name))
+			name = slashClean(name)
+			fileSlice = append(fileSlice, filepath.Join(f.Path, name))
 		}
 	}
 
-	return files, nil
+	return fileSlice, nil
 }
 
+//nolint: goconst
 func parseQueryAlgorithm(r *http.Request) (string, archiver.Writer, error) {
+	// TODO: use enum
 	switch r.URL.Query().Get("algo") {
 	case "zip", "true", "":
 		return ".zip", archiver.NewZip(), nil
@@ -55,6 +69,15 @@ func parseQueryAlgorithm(r *http.Request) (string, archiver.Writer, error) {
 	}
 }
 
+func setContentDisposition(w http.ResponseWriter, r *http.Request, file *files.FileInfo) {
+	if r.URL.Query().Get("inline") == "true" {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		// As per RFC6266 section 4.3
+		w.Header().Set("Content-Disposition", "attachment; filename*=utf-8''"+url.PathEscape(file.Name))
+	}
+}
+
 var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if !d.user.Perm.Download {
 		return http.StatusAccepted, nil
@@ -71,6 +94,11 @@ var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) 
 		return errToStatus(err), err
 	}
 
+	if files.IsNamedPipe(file.Mode) {
+		setContentDisposition(w, r, file)
+		return 0, nil
+	}
+
 	if !file.IsDir {
 		return rawFileHandler(w, r, file)
 	}
@@ -78,7 +106,7 @@ var rawHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) 
 	return rawDirHandler(w, r, d, file)
 })
 
-func addFile(ar archiver.Writer, d *data, path string) error {
+func addFile(ar archiver.Writer, d *data, path, commonPath string) error {
 	// Checks are always done with paths with "/" as path separator.
 	path = strings.Replace(path, "\\", "/", -1)
 	if !d.Check(path) {
@@ -90,21 +118,32 @@ func addFile(ar archiver.Writer, d *data, path string) error {
 		return err
 	}
 
-	file, err := d.user.Fs.Open(path)
-	if err != nil {
-		return err
+	var (
+		file          afero.File
+		arcReadCloser = ioutil.NopCloser(&bytes.Buffer{})
+	)
+	if !files.IsNamedPipe(info.Mode()) {
+		file, err = d.user.Fs.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		arcReadCloser = file
 	}
-	defer file.Close()
 
-	err = ar.Write(archiver.File{
-		FileInfo: archiver.FileInfo{
-			FileInfo:   info,
-			CustomName: strings.TrimPrefix(path, "/"),
-		},
-		ReadCloser: file,
-	})
-	if err != nil {
-		return err
+	if path != commonPath {
+		filename := strings.TrimPrefix(path, commonPath)
+		filename = strings.TrimPrefix(filename, "/")
+		err = ar.Write(archiver.File{
+			FileInfo: archiver.FileInfo{
+				FileInfo:   info,
+				CustomName: filename,
+			},
+			ReadCloser: arcReadCloser,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	if info.IsDir() {
@@ -114,7 +153,7 @@ func addFile(ar archiver.Writer, d *data, path string) error {
 		}
 
 		for _, name := range names {
-			err = addFile(ar, d, filepath.Join(path, name))
+			err = addFile(ar, d, filepath.Join(path, name), commonPath)
 			if err != nil {
 				return err
 			}
@@ -148,8 +187,10 @@ func rawDirHandler(w http.ResponseWriter, r *http.Request, d *data, file *files.
 	}
 	defer ar.Close()
 
+	commonDir := fileutils.CommonPrefix('/', filenames...)
+
 	for _, fname := range filenames {
-		err = addFile(ar, d, fname)
+		err = addFile(ar, d, fname, commonDir)
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
@@ -165,12 +206,7 @@ func rawFileHandler(w http.ResponseWriter, r *http.Request, file *files.FileInfo
 	}
 	defer fd.Close()
 
-	if r.URL.Query().Get("inline") == "true" {
-		w.Header().Set("Content-Disposition", "inline")
-	} else {
-		// As per RFC6266 section 4.3
-		w.Header().Set("Content-Disposition", "attachment; filename*=utf-8''"+url.PathEscape(file.Name))
-	}
+	setContentDisposition(w, r, file)
 
 	http.ServeContent(w, r, file.Name, file.ModTime, fd)
 	return 0, nil

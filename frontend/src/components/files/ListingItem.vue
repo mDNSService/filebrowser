@@ -2,18 +2,19 @@
   <div class="item"
   role="button"
   tabindex="0"
-  draggable="true"
+  :draggable="isDraggable"
   @dragstart="dragStart"
   @dragover="dragOver"
   @drop="drop"
-  @click="click"
-  @dblclick="open"
+  @click="itemClick"
+  @dblclick="dblclick"
   @touchstart="touchstart"
   :data-dir="isDir"
   :aria-label="name"
   :aria-selected="isSelected">
     <div>
-      <i class="material-icons">{{ icon }}</i>
+      <img v-if="type==='image' && isThumbsEnabled && !isSharing" v-lazy="thumbnailUrl">
+      <i v-else class="material-icons">{{ icon }}</i>
     </div>
 
     <div>
@@ -30,10 +31,12 @@
 </template>
 
 <script>
+import { baseURL, enableThumbs } from '@/utils/constants'
 import { mapMutations, mapGetters, mapState } from 'vuex'
 import filesize from 'filesize'
 import moment from 'moment'
 import { files as api } from '@/api'
+import * as upload  from '@/utils/upload'
 
 export default {
   name: 'item',
@@ -44,8 +47,12 @@ export default {
   },
   props: ['name', 'isDir', 'url', 'type', 'size', 'modified', 'index'],
   computed: {
-    ...mapState(['selected', 'req']),
-    ...mapGetters(['selectedCount']),
+    ...mapState(['user', 'selected', 'req', 'jwt']),
+    ...mapGetters(['selectedCount', 'isSharing']),
+    singleClick () {
+      if (this.isSharing) return false
+      return this.user.singleClick
+    },
     isSelected () {
       return (this.selected.indexOf(this.index) !== -1)
     },
@@ -56,8 +63,11 @@ export default {
       if (this.type === 'video') return 'movie'
       return 'insert_drive_file'
     },
+    isDraggable () {
+      return !this.isSharing && this.user.perm.rename
+    },
     canDrop () {
-      if (!this.isDir) return false
+      if (!this.isDir || this.isSharing) return false
 
       for (let i of this.selected) {
         if (this.req.items[i].url === this.url) {
@@ -66,6 +76,13 @@ export default {
       }
 
       return true
+    },
+    thumbnailUrl () {
+      const path = this.url.replace(/^\/files\//, '')
+      return `${baseURL}/api/preview/thumb/${path}?auth=${this.jwt}&inline=true`
+    },
+    isThumbsEnabled () {
+      return enableThumbs
     }
   },
   methods: {
@@ -101,35 +118,74 @@ export default {
 
       el.style.opacity = 1
     },
-    drop: function (event) {
+    drop: async function (event) {
       if (!this.canDrop) return
       event.preventDefault()
 
       if (this.selectedCount === 0) return
+
+      let el = event.target
+      for (let i = 0; i < 5; i++) {
+        if (el !== null && !el.classList.contains('item')) {
+          el = el.parentElement
+        }
+      }
 
       let items = []
 
       for (let i of this.selected) {
         items.push({
           from: this.req.items[i].url,
-          to: this.url + this.req.items[i].name
+          to: this.url + this.req.items[i].name,
+          name: this.req.items[i].name
         })
+      }      
+
+      let base = el.querySelector('.name').innerHTML + '/'
+      let path = this.$route.path + base
+      let baseItems = (await api.fetch(path)).items
+
+      let action = (overwrite, rename) => {
+        api.move(items, overwrite, rename).then(() => {
+          this.$store.commit('setReload', true)
+        }).catch(this.$showError)
       }
 
-      api.move(items)
-        .then(() => {
-          this.$store.commit('setReload', true)
+      let conflict = upload.checkConflict(items, baseItems)
+
+      let overwrite = false
+      let rename = false
+
+      if (conflict) {
+        this.$store.commit('showHover', {
+          prompt: 'replace-rename',
+          confirm: (event, option) => {
+            overwrite = option == 'overwrite'
+            rename = option == 'rename'
+
+            event.preventDefault()
+            this.$store.commit('closeHovers')
+            action(overwrite, rename)
+          }
         })
-        .catch(this.$showError)
+
+        return
+      }
+
+      action(overwrite, rename)
+    },
+    itemClick: function(event) {
+      if (this.singleClick && !this.$store.state.multiple) this.open()
+      else this.click(event)
     },
     click: function (event) {
-      if (this.selectedCount !== 0) event.preventDefault()
+      if (!this.singleClick && this.selectedCount !== 0) event.preventDefault()
       if (this.$store.state.selected.indexOf(this.index) !== -1) {
         this.removeSelected(this.index)
         return
       }
 
-      if (event.shiftKey && this.selected.length === 1) {
+      if (event.shiftKey && this.selected.length > 0) {
         let fi = 0
         let la = 0
 
@@ -142,14 +198,19 @@ export default {
         }
 
         for (; fi <= la; fi++) {
-          this.addSelected(fi)
+          if (this.$store.state.selected.indexOf(fi) == -1) {
+            this.addSelected(fi)
+          }
         }
 
         return
       }
 
-      if (!event.ctrlKey && !this.$store.state.multiple) this.resetSelected()
+      if (!this.singleClick && !event.ctrlKey && !event.metaKey && !this.$store.state.multiple) this.resetSelected()
       this.addSelected(this.index)
+    },
+    dblclick: function () {
+      if (!this.singleClick) this.open()
     },
     touchstart () {
       setTimeout(() => {

@@ -16,8 +16,10 @@ type Listing struct {
 }
 
 // ApplySort applies the sort order using .Order and .Sort
+//nolint:goconst
 func (l Listing) ApplySort() {
 	// Check '.Order' to know how to sort
+	// TODO: use enum
 	if !l.Sorting.Asc {
 		switch l.Sorting.By {
 		case "name":
@@ -62,11 +64,11 @@ func (l byName) Swap(i, j int) {
 // Treat upper and lower case equally
 func (l byName) Less(i, j int) bool {
 	if l.Items[i].IsDir && !l.Items[j].IsDir {
-		return true
+		return l.Sorting.Asc
 	}
 
 	if !l.Items[i].IsDir && l.Items[j].IsDir {
-		return false
+		return !l.Sorting.Asc
 	}
 
 	return natural.Less(strings.ToLower(l.Items[j].Name), strings.ToLower(l.Items[i].Name))

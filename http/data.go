@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/tomasen/realip"
+
+	"github.com/filebrowser/filebrowser/v2/rules"
 	"github.com/filebrowser/filebrowser/v2/runner"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage"
@@ -24,32 +27,37 @@ type data struct {
 
 // Check implements rules.Checker.
 func (d *data) Check(path string) bool {
-	for _, rule := range d.user.Rules {
-		if rule.Matches(path) {
-			return rule.Allow
-		}
+	if d.user.HideDotfiles && rules.MatchHidden(path) {
+		return false
 	}
 
+	allow := true
 	for _, rule := range d.settings.Rules {
 		if rule.Matches(path) {
-			return rule.Allow
+			allow = rule.Allow
 		}
 	}
 
-	return true
+	for _, rule := range d.user.Rules {
+		if rule.Matches(path) {
+			allow = rule.Allow
+		}
+	}
+
+	return allow
 }
 
-func handle(fn handleFunc, prefix string, storage *storage.Storage, server *settings.Server) http.Handler {
+func handle(fn handleFunc, prefix string, store *storage.Storage, server *settings.Server) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		settings, err := storage.Settings.Get()
+		settings, err := store.Settings.Get()
 		if err != nil {
 			log.Fatalln("ERROR: couldn't get settings")
 			return
 		}
 
 		status, err := fn(w, r, &data{
-			Runner:   &runner.Runner{Settings: settings},
-			store:    storage,
+			Runner:   &runner.Runner{Enabled: server.EnableExec, Settings: settings},
+			store:    store,
 			settings: settings,
 			server:   server,
 		})
@@ -60,7 +68,8 @@ func handle(fn handleFunc, prefix string, storage *storage.Storage, server *sett
 		}
 
 		if status >= 400 || err != nil {
-			log.Printf("%s: %v %s %v", r.URL.Path, status, r.RemoteAddr, err)
+			clientIP := realip.FromRequest(r)
+			log.Printf("%s: %v %s %v", r.URL.Path, status, clientIP, err)
 		}
 	})
 

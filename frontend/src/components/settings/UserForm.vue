@@ -24,8 +24,12 @@
       <input type="checkbox" :disabled="user.perm.admin" v-model="user.lockPassword"> {{ $t('settings.lockPassword') }}
     </p>
 
+    <p>
+      <input type="checkbox" v-model="user.singleClick"> {{ $t('settings.singleClick') }}
+    </p>
+
     <permissions :perm.sync="user.perm" />
-    <commands :commands.sync="user.commands" />
+    <commands v-if="isExecEnabled" :commands.sync="user.commands" />
 
     <div v-if="!isDefault">
       <h3>{{ $t('settings.rules') }}</h3>
@@ -40,6 +44,7 @@ import Languages from './Languages'
 import Rules from './Rules'
 import Permissions from './Permissions'
 import Commands from './Commands'
+import { enableExec } from '@/utils/constants'
 
 export default {
   name: 'user',
@@ -53,7 +58,8 @@ export default {
   computed: {
     passwordPlaceholder () {
       return this.isNew ? '' : this.$t('settings.avoidChanges')
-    }
+    },
+    isExecEnabled: () => enableExec
   },
   watch: {
     'user.perm.admin': function () {

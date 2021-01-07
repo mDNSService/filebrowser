@@ -1,16 +1,6 @@
 <template>
   <div>
-    <help v-if="showHelp" ></help>
-    <download v-else-if="showDownload"></download>
-    <new-file v-else-if="showNewFile"></new-file>
-    <new-dir v-else-if="showNewDir"></new-dir>
-    <rename v-else-if="showRename"></rename>
-    <delete v-else-if="showDelete"></delete>
-    <info v-else-if="showInfo"></info>
-    <move v-else-if="showMove"></move>
-    <copy v-else-if="showCopy"></copy>
-    <replace v-else-if="showReplace"></replace>
-    <share v-else-if="show === 'share'"></share>
+    <component ref="currentComponent" :is="currentComponent"></component>
     <div v-show="showOverlay" @click="resetPrompts" class="overlay"></div>
   </div>
 </template>
@@ -26,7 +16,9 @@ import Copy from './Copy'
 import NewFile from './NewFile'
 import NewDir from './NewDir'
 import Replace from './Replace'
+import ReplaceRename from './ReplaceRename'
 import Share from './Share'
+import Upload from './Upload'
 import { mapState } from 'vuex'
 import buttons from '@/utils/buttons'
 
@@ -43,7 +35,9 @@ export default {
     NewFile,
     NewDir,
     Help,
-    Replace
+    Replace,
+    ReplaceRename,
+    Upload
   },
   data: function () {
     return {
@@ -54,18 +48,54 @@ export default {
       }
     }
   },
+  created () {
+    window.addEventListener('keydown', (event) => {
+      if (this.show == null)
+      return
+
+      let prompt = this.$refs.currentComponent;
+
+      // Enter
+      if (event.keyCode == 13) {
+        switch (this.show) {
+          case 'delete':
+            prompt.submit()
+            break;
+          case 'copy':
+            prompt.copy(event)
+            break;
+          case 'move':
+            prompt.move(event)
+            break;
+          case 'replace':
+            prompt.showConfirm(event)
+            break;
+        }
+
+      }
+    })
+  },
   computed: {
     ...mapState(['show', 'plugins']),
-    showInfo: function () { return this.show === 'info' },
-    showHelp: function () { return this.show === 'help' },
-    showDelete: function () { return this.show === 'delete' },
-    showRename: function () { return this.show === 'rename' },
-    showMove: function () { return this.show === 'move' },
-    showCopy: function () { return this.show === 'copy' },
-    showNewFile: function () { return this.show === 'newFile' },
-    showNewDir: function () { return this.show === 'newDir' },
-    showDownload: function () { return this.show === 'download' },
-    showReplace: function () { return this.show === 'replace' },
+    currentComponent: function () {
+      const matched = [
+        'info',
+        'help',
+        'delete',
+        'rename',
+        'move',
+        'copy',
+        'newFile',
+        'newDir',
+        'download',
+        'replace',
+        'replace-rename',
+        'share',
+        'upload'
+      ].indexOf(this.show) >= 0;
+
+      return matched && this.show || null;
+    },
     showOverlay: function () {
       return (this.show !== null && this.show !== 'search' && this.show !== 'more')
     }
